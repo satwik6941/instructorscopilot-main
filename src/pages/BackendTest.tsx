@@ -23,7 +23,7 @@ export default function BackendTest() {
       { name: "Backend Connection", status: 'pending' },
       { name: "Debug Info", status: 'pending' },
       { name: "List Files", status: 'pending' },
-      { name: "List Courses", status: 'pending' },
+      { name: "My Courses", status: 'pending' },
       { name: "Generation Status", status: 'pending' },
     ];
     setResults([...testResults]);
@@ -83,21 +83,21 @@ export default function BackendTest() {
     }
     setResults([...testResults]);
 
-    // Test 4: List courses
+    // Test 4: My Courses
     try {
-      const response = await apiCall(`${API_BASE}/courses`);
+      const response = await apiCall(`${API_BASE}/my-courses`);
       const coursesData = response.data as { courses?: unknown[] };
       testResults[3] = {
-        name: "List Courses",
+        name: "My Courses",
         status: response.success ? 'success' : 'error',
         message: response.success ? `Found ${coursesData?.courses?.length || 0} courses` : response.error,
         data: response.data
       };
     } catch (error) {
       testResults[3] = {
-        name: "List Courses",
+        name: "My Courses",
         status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to list courses'
+        message: error instanceof Error ? error.message : 'Failed to list my courses'
       };
     }
     setResults([...testResults]);

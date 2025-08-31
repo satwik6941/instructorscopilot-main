@@ -487,6 +487,32 @@ async def create_course():
         with open(config_file, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
         
+        # Helper function to filter files by type
+        def get_allowed_files(directory: Path, category: str):
+            files = []
+            if not directory.exists():
+                return files
+            
+            # Define allowed extensions per category
+            allowed_extensions = {
+                "course material": [".pdf", ".docx"],  # No .txt for course material
+                "quizzes": [".pdf"],  # Only PDFs for quizzes
+                "ppts": [".pptx"],  # Only PowerPoint files
+                "flashcards": [".png", ".jpg", ".jpeg", ".gif"]  # Only images for flashcards
+            }
+            
+            category_extensions = allowed_extensions.get(category, [])
+            
+            for file_path in directory.glob("*"):
+                if file_path.is_file() and file_path.suffix.lower() in category_extensions:
+                    files.append({
+                        "name": file_path.name,
+                        "size": file_path.stat().st_size,
+                        "created": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                        "download_url": f"/download/{category.replace(' ', '-')}/{file_path.name}"
+                    })
+            return files
+        
         # Create course data
         course_data = {
             "id": f"course_{int(time.time())}",
@@ -507,21 +533,11 @@ async def create_course():
             }
         }
         
-        # Collect generated files
+        # Collect filtered files
         for category in CATEGORIES:
             category_key = category.replace(" ", "_")
             directory = UPLOAD_DIR / category
-            if directory.exists():
-                files = []
-                for file_path in directory.glob("*"):
-                    if file_path.is_file():
-                        files.append({
-                            "name": file_path.name,
-                            "size": file_path.stat().st_size,
-                            "created": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
-                            "download_url": f"/download/{category.replace(' ', '-')}/{file_path.name}"
-                        })
-                course_data["files"][category_key] = files
+            course_data["files"][category_key] = get_allowed_files(directory, category)
         
         # Save course to courses.json
         courses_file = Path("courses.json")
@@ -544,9 +560,9 @@ async def create_course():
         logger.error(f"Error creating course: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/courses")
-async def list_courses():
-    """List all created courses"""
+@app.get("/my-courses")
+async def list_my_courses():
+    """List all created courses for My Courses page"""
     try:
         courses_file = Path("courses.json")
         if not courses_file.exists():
@@ -561,7 +577,7 @@ async def list_courses():
         return {"courses": courses, "total": len(courses)}
         
     except Exception as e:
-        logger.error(f"Error listing courses: {e}")
+        logger.error(f"Error listing my courses: {e}")
         return {"courses": [], "total": 0, "error": str(e)}
 
 @app.get("/courses/{course_id}")
@@ -761,48 +777,26 @@ def _slugify(name: str) -> str:
     return "-".join(base.strip().lower().replace("_", " ").split())
 
 @app.get("/courses")
-async def list_courses():
-    """Group generated content into courses based on files in 'course material'."""
-    cm_dir = _safe_category_to_dir("course-material")
-    if not cm_dir.exists():
-        return {"courses": [], "total": 0}
-    courses: Dict[str, Dict] = {}
-    # Identify courses from course material files (txt/docx/pdf)
-    for p in cm_dir.iterdir():
-        if p.is_file() and p.suffix.lower() in [".txt", ".docx", ".pdf"]:
-            stem = p.stem
-            slug = _slugify(stem)
-            info = courses.setdefault(slug, {
-                "slug": slug,
-                "title": stem,
-                "updated": datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
-                "categories": {"course-material": 0, "quizzes": 0, "ppts": 0, "flashcards": 0},
-            })
-            info["categories"]["course-material"] += 1
-            # Track latest update
-            ts = datetime.fromtimestamp(p.stat().st_mtime).isoformat()
-            if ts > info["updated"]:
-                info["updated"] = ts
-    # Count across other categories by prefix match
-    for cat in ["quizzes", "ppts", "flashcards"]:
-        d = _safe_category_to_dir(cat)
-        if not d.exists():
-            continue
-        for p in d.iterdir():
-            if not p.is_file():
-                continue
-            stem = p.stem
-            # attempt to map to a known course by checking if any course title is a prefix of stem
-            for slug, info in courses.items():
-                title_stem = info["title"]
-                if stem.lower().startswith(title_stem.lower()):
-                    info["categories"][cat] += 1
-                    ts = datetime.fromtimestamp(p.stat().st_mtime).isoformat()
-                    if ts > info["updated"]:
-                        info["updated"] = ts
-                    break
-    list_courses_resp = sorted(courses.values(), key=lambda x: x["updated"], reverse=True)
-    return {"courses": list_courses_resp, "total": len(list_courses_resp)}
+async def list_courses_discovery():
+    """Discovery endpoint for browsing available course templates - different from My Courses"""
+    # This could be used for a course marketplace/discovery feature in the future
+    # For now, return the same as my-courses but could be expanded
+    try:
+        courses_file = Path("courses.json")
+        if not courses_file.exists():
+            return {"courses": [], "total": 0}
+        
+        with open(courses_file, 'r', encoding='utf-8') as f:
+            courses = json.load(f)
+        
+        # Sort by creation date, newest first
+        courses.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        
+        return {"courses": courses, "total": len(courses)}
+        
+    except Exception as e:
+        logger.error(f"Error listing courses: {e}")
+        return {"courses": [], "total": 0, "error": str(e)}
 
 @app.get("/courses/{slug}")
 async def course_detail(slug: str):

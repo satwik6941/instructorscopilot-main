@@ -45,7 +45,7 @@ export default function MyCourses() {
   const fetchCourses = async () => {
     try {
       setLoading(true);
-      const response = await apiCall(`${API_BASE}/courses`);
+      const response = await apiCall(`${API_BASE}/my-courses`);
       
       if (response.success) {
         const coursesData = response.data as { courses?: Course[] };
