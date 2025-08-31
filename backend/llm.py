@@ -184,7 +184,7 @@ def generate_course_content(client, teaching_style, duration, difficulty_level, 
         ))
     
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-2.0-flash',
         contents=contents,
         config=genai.types.GenerateContentConfig(
             tools=[google_search_tool],

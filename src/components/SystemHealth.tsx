@@ -21,10 +21,21 @@ export function SystemHealth() {
   
   const checkHealth = async () => {
     setChecking(true);
+    console.log('SystemHealth: Checking API at:', API_BASE);
+    
     try {
       // Check API connection
-      const debugResponse = await apiCall(`${API_BASE}/debug/info`);
-      const statusResponse = await apiCall(`${API_BASE}/generation/status`);
+      const debugUrl = `${API_BASE}/debug/info`;
+      const statusUrl = `${API_BASE}/generation/status`;
+      
+      console.log('SystemHealth: Calling debug URL:', debugUrl);
+      console.log('SystemHealth: Calling status URL:', statusUrl);
+      
+      const debugResponse = await apiCall(debugUrl);
+      const statusResponse = await apiCall(statusUrl);
+      
+      console.log('SystemHealth: Debug response:', debugResponse);
+      console.log('SystemHealth: Status response:', statusResponse);
       
       if (debugResponse.success && statusResponse.success) {
         const debugData = debugResponse.data as { 
@@ -47,17 +58,18 @@ export function SystemHealth() {
           generation_completed: false,
           backup_available: false,
           last_checked: new Date().toLocaleTimeString(),
-          error: debugResponse.error || statusResponse.error || 'API connection failed'
+          error: `API Base: ${API_BASE} | Debug Error: ${debugResponse.error} | Status Error: ${statusResponse.error}`
         });
       }
     } catch (error) {
+      console.error('SystemHealth: Caught error:', error);
       setHealth({
         api_connected: false,
         files_available: false,
         generation_completed: false,
         backup_available: false,
         last_checked: new Date().toLocaleTimeString(),
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: `API Base: ${API_BASE} | Error: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
     } finally {
       setChecking(false);

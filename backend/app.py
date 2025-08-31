@@ -393,32 +393,197 @@ async def get_status():
         logger.error(f"Error in get_status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/generated-files/")
-async def get_generated_files():
+@app.get("/generation/status")
+async def generation_status():
+    """Return whether generation has completed, by checking a marker file."""
+    try:
+        marker = UPLOAD_DIR / "generation_complete.json"
+        if marker.exists():
+            try:
+                with open(marker, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return {"completed": bool(data.get("completed", False)), "completed_at": data.get("completed_at")}
+            except Exception:
+                return {"completed": True, "completed_at": None}
+        return {"completed": False, "completed_at": None}
+    except Exception as e:
+        logger.error(f"Error checking generation status: {e}")
+        return {"completed": False, "error": str(e)}
+
+@app.get("/debug/info")
+async def debug_info():
+    """Debug endpoint to check system status"""
+    try:
+        return {
+            "upload_dir_exists": UPLOAD_DIR.exists(),
+            "backup_dir_exists": BACKUP_DIR.exists(),
+            "upload_dir_contents": list(str(p) for p in UPLOAD_DIR.glob("**/*") if p.is_file()) if UPLOAD_DIR.exists() else [],
+            "backup_dir_contents": list(str(p) for p in BACKUP_DIR.glob("**/*") if p.is_file()) if BACKUP_DIR.exists() else [],
+            "categories": CATEGORIES,
+            "config_exists": Path("user_config.json").exists(),
+            "curriculum_exists": (UPLOAD_DIR / "curriculum.pdf").exists(),
+            "generation_marker_exists": (UPLOAD_DIR / "generation_complete.json").exists(),
+            "environment": {
+                "gemini_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+                "cors_origins": os.environ.get("BACKEND_CORS_ORIGINS", "not_set"),
+                "platform": platform.system(),
+            }
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/files/{category}")
+async def list_category_files(category: str):
     """
-    Get list of generated files
+    List files for a given category: course-material | quizzes | ppts | flashcards
     """
     try:
-        generated_files = []
-        output_dir = UPLOAD_DIR
-        
-        if output_dir.exists():
-            for file_path in output_dir.glob("*"):
-                if file_path.is_file() and file_path.suffix in ['.txt', '.docx', '.pdf', '.pptx']:
-                    generated_files.append({
-                        "name": file_path.name,
-                        "path": str(file_path),
-                        "size": file_path.stat().st_size,
-                        "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
-                    })
+        directory = _safe_category_to_dir(category)
+        files = _list_files_in_dir(directory)
         
         return {
-            "files": generated_files,
-            "total": len(generated_files)
+            "category": category, 
+            "directory": str(directory), 
+            "files": files, 
+            "total": len(files),
+            "backup_checked": len(files) > 0,
+            "debug": {
+                "directory_exists": directory.exists(),
+                "backup_dir": str(BACKUP_DIR / directory.name) if directory.name in CATEGORIES else str(BACKUP_DIR)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error listing files for category {category}: {e}")
+        return {
+            "category": category,
+            "directory": "error",
+            "files": [],
+            "total": 0,
+            "error": str(e)
+        }
+
+@app.get("/download/{category}/{filename}")
+async def download_file(category: str, filename: str):
+    """Download a file by category and filename."""
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    directory = _safe_category_to_dir(category)
+    file_path = directory / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path=str(file_path), filename=filename)
+
+# Course management endpoints
+@app.post("/courses/create")
+async def create_course():
+    """Create a course from generated content and user config"""
+    try:
+        # Load user config
+        config_file = Path("user_config.json")
+        if not config_file.exists():
+            raise HTTPException(status_code=400, detail="No user configuration found")
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            user_config = json.load(f)
+        
+        # Create course data
+        course_data = {
+            "id": f"course_{int(time.time())}",
+            "title": user_config.get("course_topic", "Untitled Course"),
+            "description": f"Generated course for {user_config.get('course_topic', 'Unknown Topic')}",
+            "difficulty_level": user_config.get("difficulty_level", "Intermediate"),
+            "duration": user_config.get("duration", 1),
+            "teaching_style": user_config.get("teaching_style", "Mixed"),
+            "created_by": user_config.get("user_name", "Unknown"),
+            "user_id": user_config.get("user_id", "unknown"),
+            "created_at": datetime.now().isoformat(),
+            "status": "completed",
+            "files": {
+                "course_material": [],
+                "quizzes": [],
+                "ppts": [],
+                "flashcards": []
+            }
         }
         
+        # Collect generated files
+        for category in CATEGORIES:
+            category_key = category.replace(" ", "_")
+            directory = UPLOAD_DIR / category
+            if directory.exists():
+                files = []
+                for file_path in directory.glob("*"):
+                    if file_path.is_file():
+                        files.append({
+                            "name": file_path.name,
+                            "size": file_path.stat().st_size,
+                            "created": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                            "download_url": f"/download/{category.replace(' ', '-')}/{file_path.name}"
+                        })
+                course_data["files"][category_key] = files
+        
+        # Save course to courses.json
+        courses_file = Path("courses.json")
+        courses = []
+        if courses_file.exists():
+            try:
+                with open(courses_file, 'r', encoding='utf-8') as f:
+                    courses = json.load(f)
+            except:
+                courses = []
+        
+        courses.append(course_data)
+        
+        with open(courses_file, 'w', encoding='utf-8') as f:
+            json.dump(courses, f, indent=2, ensure_ascii=False)
+        
+        return {"success": True, "course": course_data}
+        
     except Exception as e:
-        logger.error(f"Error in get_generated_files: {str(e)}")
+        logger.error(f"Error creating course: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/courses")
+async def list_courses():
+    """List all created courses"""
+    try:
+        courses_file = Path("courses.json")
+        if not courses_file.exists():
+            return {"courses": [], "total": 0}
+        
+        with open(courses_file, 'r', encoding='utf-8') as f:
+            courses = json.load(f)
+        
+        # Sort by creation date, newest first
+        courses.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        
+        return {"courses": courses, "total": len(courses)}
+        
+    except Exception as e:
+        logger.error(f"Error listing courses: {e}")
+        return {"courses": [], "total": 0, "error": str(e)}
+
+@app.get("/courses/{course_id}")
+async def get_course(course_id: str):
+    """Get a specific course by ID"""
+    try:
+        courses_file = Path("courses.json")
+        if not courses_file.exists():
+            raise HTTPException(status_code=404, detail="No courses found")
+        
+        with open(courses_file, 'r', encoding='utf-8') as f:
+            courses = json.load(f)
+        
+        course = next((c for c in courses if c["id"] == course_id), None)
+        if not course:
+            raise HTTPException(status_code=404, detail="Course not found")
+        
+        return course
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting course {course_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

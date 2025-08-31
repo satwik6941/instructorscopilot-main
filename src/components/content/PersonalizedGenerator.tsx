@@ -209,7 +209,25 @@ export function PersonalizedGenerator() {
       // Step 3: Wait for completion and fetch preview
       await waitForGenerationCompletion();
 
-      // Step 4: Fetch real preview text
+      // Step 4: Create course automatically after successful generation
+      try {
+        const courseResponse = await fetch(`${API_BASE}/courses/create`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (courseResponse.ok) {
+          const courseResult = await courseResponse.json();
+          console.log('Course created successfully:', courseResult);
+        }
+      } catch (e) {
+        console.warn('Failed to create course entry:', e);
+        // Don't fail the whole process if course creation fails
+      }
+
+      // Step 5: Fetch real preview text
       try {
         const previewResp = await fetch(`${API_BASE}/course-material/preview`);
         if (previewResp.ok) {
@@ -217,17 +235,17 @@ export function PersonalizedGenerator() {
           setGeneratedContent(previewData.preview || 'Content generated successfully! Check the dashboard for files.');
         } else {
           // Fallback to summary if preview not available
-          const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nFiles created: ${generateResult.total_files || 'Multiple'}\n\nCheck the Dashboard to view and download your materials.`;
+          const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nFiles created: ${generateResult.total_files || 'Multiple'}\n\nCheck the Dashboard and My Courses to view and download your materials.`;
           setGeneratedContent(contentSummary);
         }
       } catch (e) {
-        const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nCheck the Dashboard to view and download your materials.`;
+        const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nCheck the Dashboard and My Courses to view and download your materials.`;
         setGeneratedContent(contentSummary);
       }
 
       toast({
         title: "Content Generated Successfully!",
-        description: `Generated ${generateResult.total_files || 'multiple'} course files. Check the Dashboard to access them.`,
+        description: `Generated ${generateResult.total_files || 'multiple'} course files. Course saved to "My Courses".`,
       });
 
     } catch (error: unknown) {

@@ -24,7 +24,8 @@ interface SidebarProps {
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: Home, description: "Overview & insights" },
   { name: "Create Content", href: "/create", icon: Sparkles, description: "AI course builder" },
-  { name: "My Courses", href: "/courses", icon: BookOpen, description: "Course library" },
+  { name: "Courses", href: "/courses", icon: BookOpen, description: "Course library" },
+  { name: "My Courses", href: "/my-courses", icon: FileText, description: "Generated content" },
   { name: "Students", href: "/students", icon: Users, description: "Manage learners" },
 ];
 

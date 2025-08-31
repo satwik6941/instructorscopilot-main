@@ -9,6 +9,8 @@ import Dashboard from "./pages/Dashboard";
 import Create from "./pages/Create";
 import Courses from "./pages/Courses";
 import Students from "./pages/Students";
+import MyCourses from "./pages/MyCourses";
+import BackendTest from "./pages/BackendTest";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
@@ -60,8 +62,10 @@ const App = () => (
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/create" element={<Create />} />
                 <Route path="/courses" element={<Courses />} />
+                <Route path="/my-courses" element={<MyCourses />} />
                 <Route path="/courses/:slug" element={<CourseDetail />} />
                 <Route path="/students" element={<Students />} />
+                <Route path="/test" element={<BackendTest />} />
                 <Route path="/settings" element={<Settings />} />
               </Route>
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
