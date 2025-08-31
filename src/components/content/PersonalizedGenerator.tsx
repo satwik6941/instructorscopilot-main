@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { UploadBoxBig } from "../ui/upload-box-big";
 import { UploadBoxSmall } from "../ui/upload-box-small";
 import { useAuth } from "@/contexts/AuthContext";
-import { API_BASE } from "@/lib/config";
+import { API_BASE, API_TIMEOUT } from "@/lib/config";
 
 interface ContentRequest {
   topic: string;
@@ -130,6 +130,10 @@ export function PersonalizedGenerator() {
     setIsGenerating(true);
 
     try {
+      // Create AbortController for timeout management
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
       // Step 1: Upload curriculum and create config
       const formData = new FormData();
       formData.append('file', uploadedFile);
@@ -146,17 +150,26 @@ export function PersonalizedGenerator() {
         course_topic: contentRequest.topic,
         no_of_weeks: contentRequest.duration,
         difficulty_level: getDifficultyLabel(contentRequest.difficulty),
-        teaching_style: getTeachingStyleLabel(contentRequest.teachingStyle)
+        teaching_style: getTeachingStyleLabel(contentRequest.teachingStyle),
+        api_base: API_BASE
       });
 
       const uploadResponse = await fetch(`${API_BASE}/upload-curriculum/`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
       if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json();
-        throw new Error(errorData.detail || "File upload failed.");
+        const errorText = await uploadResponse.text();
+        let errorMessage = "File upload failed.";
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const uploadResult = await uploadResponse.json();
@@ -167,53 +180,102 @@ export function PersonalizedGenerator() {
         description: "Starting content generation...",
       });
 
-      // Step 2: Generate content
+      // Step 2: Generate content with better error handling
       const generateResponse = await fetch(`${API_BASE}/generate-content/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
+
       if (!generateResponse.ok) {
-        const errorData = await generateResponse.json();
-        throw new Error(errorData.detail || "Content generation failed.");
+        const errorText = await generateResponse.text();
+        let errorMessage = "Content generation failed.";
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const generateResult = await generateResponse.json();
       console.log('Generation successful:', generateResult);
 
-      // Step 3: Fetch real preview text
+      // Step 3: Wait for completion and fetch preview
+      await waitForGenerationCompletion();
+
+      // Step 4: Fetch real preview text
       try {
         const previewResp = await fetch(`${API_BASE}/course-material/preview`);
         if (previewResp.ok) {
           const previewData = await previewResp.json();
-          setGeneratedContent(previewData.preview || '');
+          setGeneratedContent(previewData.preview || 'Content generated successfully! Check the dashboard for files.');
         } else {
           // Fallback to summary if preview not available
-          const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated. Preview is not yet available.`;
+          const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nFiles created: ${generateResult.total_files || 'Multiple'}\n\nCheck the Dashboard to view and download your materials.`;
           setGeneratedContent(contentSummary);
         }
       } catch (e) {
-        const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated. Preview fetch failed.`;
+        const contentSummary = `# ${contentRequest.topic} - Course Generation Complete\n\n✅ Content generated successfully!\n\nCheck the Dashboard to view and download your materials.`;
         setGeneratedContent(contentSummary);
       }
 
       toast({
         title: "Content Generated Successfully!",
-        description: `Generated ${generateResult.total_files} course files`,
+        description: `Generated ${generateResult.total_files || 'multiple'} course files. Check the Dashboard to access them.`,
       });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Generation error:', error);
-      toast({
-        title: "Generation Failed",
-        description: error.message || "Failed to generate content",
-        variant: "destructive"
-      });
+      
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate content. Please check your internet connection and try again.";
+      
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast({
+          title: "Generation Timeout",
+          description: "The generation process took too long. Please try again or contact support.",
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: errorMessage,
+          variant: "destructive"
+        });
+      }
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  // Helper function to wait for generation completion
+  const waitForGenerationCompletion = async (maxWaitTime = 300000) => { // 5 minutes max
+    const startTime = Date.now();
+    const pollInterval = 3000; // 3 seconds
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        const statusResp = await fetch(`${API_BASE}/generation/status`);
+        if (statusResp.ok) {
+          const statusData = await statusResp.json();
+          if (statusData.completed) {
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn('Status check failed:', e);
+      }
+      
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+    
+    throw new Error('Generation process timed out');
   };
 
   const getDifficultyLabel = (difficulty: number | null): string => {

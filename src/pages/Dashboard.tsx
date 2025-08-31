@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Users, FileText, TrendingUp, Sparkles, Clock, Loader2, Download } from "lucide-react";
-import { API_BASE } from "@/lib/config";
+import { API_BASE, POLLING_INTERVAL } from "@/lib/config";
+import { apiCall } from "@/lib/api-utils";
 import { QuickActions } from "@/components/dashboard/QuickActions";
+import { SystemHealth } from "@/components/SystemHealth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -33,14 +35,18 @@ export default function Dashboard() {
     const waitForGeneration = async () => {
       try {
         for (let i = 0; i < 60; i++) {
-          const res = await fetch(`${API_BASE}/generation/status`);
-          const j = res.ok ? await res.json() : { completed: true };
-          if (j.completed) return true;
-          await new Promise(r => setTimeout(r, 1000));
+          const response = await apiCall(`${API_BASE}/generation/status`);
+          if (response.success && (response.data as { completed?: boolean })?.completed) {
+            return true;
+          }
+          await new Promise(r => setTimeout(r, POLLING_INTERVAL));
         }
-      } catch {}
+      } catch (error) {
+        console.warn('Generation status check failed:', error);
+      }
       return true; // fail-open
     };
+    
     const fetchFiles = async () => {
       setWaiting(true);
       await waitForGeneration();
@@ -48,19 +54,27 @@ export default function Dashboard() {
       setWaiting(false);
       setLoading(true);
       setError(null);
+      
       try {
-        const res = await fetch(`${API_BASE}/files/${active}`);
-        if (!res.ok) throw new Error(`Failed to fetch ${active} files`);
-        const data = await res.json();
+        const response = await apiCall(`${API_BASE}/files/${active}`);
+        
         if (!cancelled) {
-          setFiles(prev => ({ ...prev, [active]: data.files || [] }));
+          if (response.success) {
+            const filesData = (response.data as { files?: ListedFile[] })?.files || [];
+            setFiles(prev => ({ ...prev, [active]: filesData }));
+          } else {
+            setError(response.error || `Failed to load ${active} files`);
+          }
         }
-      } catch (e: any) {
-        if (!cancelled) setError(e.message || "Failed to load files");
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : `Failed to load ${active} files`;
+        if (!cancelled) setError(errorMessage);
+        console.error('File fetch error:', error);
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
+    
     fetchFiles();
     return () => { cancelled = true; };
   }, [active]);
@@ -76,6 +90,9 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
+      {/* System Health Check */}
+      <SystemHealth />
+
       {/* Welcome Section */}
       <div className="bg-gradient-hero rounded-xl p-8 text-white shadow-glow">
         <div className="max-w-2xl">

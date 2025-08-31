@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 import logging
 from datetime import datetime
+import base64
 
 # Set environment variables for proper encoding
 os.environ['PYTHONIOENCODING'] = 'utf-8'
@@ -24,13 +25,28 @@ app = FastAPI(title="Instructors Copilot API", version="1.0.0")
 # CORS middleware to allow frontend to connect
 cors_env = os.environ.get("BACKEND_CORS_ORIGINS", "")
 extra_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+
+# Get Vercel URL from environment or use default
+vercel_url = os.environ.get("VERCEL_URL", "instructorscopilot-main-lovat.vercel.app")
+if not vercel_url.startswith("http"):
+    vercel_url = f"https://{vercel_url}"
+
 default_origins = [
         "http://localhost:8080",
         "http://localhost:5173",
+        "http://localhost:3000",
+        vercel_url,
         "https://instructorscopilot-main-lovat.vercel.app",
-        "https://*.vercel.app",
+        # Add common Vercel patterns for your app
+        "https://instructorscopilot-main.vercel.app",
+        "https://instructorscopilot-main-git-main-theryanpereira.vercel.app",
 ]
-allow_origins = list({*default_origins, *extra_origins})
+
+# Add any additional origins from environment
+if extra_origins:
+    default_origins.extend(extra_origins)
+
+allow_origins = list(set(default_origins))
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,16 +56,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure directories exist
+# Ensure directories exist and create backup structure
 UPLOAD_DIR = Path("Inputs and Outputs")
 UPLOAD_DIR.mkdir(exist_ok=True)
-# Also ensure known category subdirectories exist to avoid downstream issues
-for sub in ["course material", "quizzes", "ppts", "flashcards"]:
-    (UPLOAD_DIR / sub).mkdir(exist_ok=True)
 
+# Create backup directory for file persistence
+BACKUP_DIR = Path("backup_files")
+BACKUP_DIR.mkdir(exist_ok=True)
+
+# Also ensure known category subdirectories exist to avoid downstream issues
+CATEGORIES = ["course material", "quizzes", "ppts", "flashcards"]
+for sub in CATEGORIES:
+    (UPLOAD_DIR / sub).mkdir(exist_ok=True)
+    (BACKUP_DIR / sub).mkdir(exist_ok=True)
+
+def backup_generated_files():
+    """Backup generated files to ensure persistence"""
+    try:
+        logger.info("Creating backup of generated files...")
+        for category in CATEGORIES:
+            source_dir = UPLOAD_DIR / category
+            backup_category_dir = BACKUP_DIR / category
+            
+            if source_dir.exists():
+                for file_path in source_dir.glob("*"):
+                    if file_path.is_file():
+                        backup_file_path = backup_category_dir / file_path.name
+                        shutil.copy2(file_path, backup_file_path)
+                        logger.info(f"Backed up {file_path.name} to {category}")
+                        
+        # Also backup files in root directory
+        for file_path in UPLOAD_DIR.glob("*"):
+            if file_path.is_file() and file_path.suffix in ['.txt', '.docx', '.pdf', '.pptx']:
+                backup_file_path = BACKUP_DIR / file_path.name
+                shutil.copy2(file_path, backup_file_path)
+                logger.info(f"Backed up {file_path.name} to root backup")
+                
+    except Exception as e:
+        logger.error(f"Backup failed: {e}")
+
+def restore_files_from_backup():
+    """Restore files from backup if main directory is empty"""
+    try:
+        logger.info("Checking if file restoration is needed...")
+        
+        # Check if we need to restore files
+        main_files_exist = any(UPLOAD_DIR.glob("**/*"))
+        backup_files_exist = any(BACKUP_DIR.glob("**/*"))
+        
+        if not main_files_exist and backup_files_exist:
+            logger.info("Restoring files from backup...")
+            
+            # Restore category files
+            for category in CATEGORIES:
+                backup_category_dir = BACKUP_DIR / category
+                source_dir = UPLOAD_DIR / category
+                
+                if backup_category_dir.exists():
+                    for backup_file in backup_category_dir.glob("*"):
+                        if backup_file.is_file():
+                            restore_path = source_dir / backup_file.name
+                            shutil.copy2(backup_file, restore_path)
+                            logger.info(f"Restored {backup_file.name} to {category}")
+            
+            # Restore root files
+            for backup_file in BACKUP_DIR.glob("*"):
+                if backup_file.is_file() and backup_file.suffix in ['.txt', '.docx', '.pdf', '.pptx']:
+                    restore_path = UPLOAD_DIR / backup_file.name
+                    shutil.copy2(backup_file, restore_path)
+                    logger.info(f"Restored {backup_file.name} to root")
+                    
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"File restoration failed: {e}")
+        return False
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    # Try to restore files on startup if needed
+    restore_files_from_backup()
     return {"message": "Instructors Copilot API is running"}
 
 @app.post("/upload-curriculum/")
@@ -235,16 +321,22 @@ async def generate_content():
             success = result.returncode == 0 or len(generated_files) > 0
             
             if success:
+                # Backup the generated files immediately
+                backup_generated_files()
+                
                 # Write completion marker
                 try:
                     marker = UPLOAD_DIR / "generation_complete.json"
                     with open(marker, "w", encoding="utf-8") as f:
                         json.dump({
                             "completed": True,
-                            "completed_at": datetime.now().isoformat()
+                            "completed_at": datetime.now().isoformat(),
+                            "files_generated": len(generated_files),
+                            "backup_created": True
                         }, f)
                 except Exception as e:
                     logger.warning(f"Failed to write generation_complete.json: {e}")
+                    
                 return JSONResponse(
                     status_code=200,
                     content={
@@ -252,7 +344,8 @@ async def generate_content():
                         "generated_files": generated_files,
                         "total_files": len(generated_files),
                         "process_completed": True,
-                        "return_code": result.returncode
+                        "return_code": result.returncode,
+                        "backup_created": True
                     }
                 )
             else:
@@ -352,20 +445,51 @@ def _safe_category_to_dir(category: str) -> Path:
     return UPLOAD_DIR / sub
 
 def _list_files_in_dir(directory: Path) -> List[Dict]:
-    if not directory.exists():
-        return []
+    """List files in directory with detailed information and fallback to backup"""
     items: List[Dict] = []
-    for p in directory.iterdir():
-        if p.is_file():
-            try:
-                items.append({
-                    "name": p.name,
-                    "size": p.stat().st_size,
-                    "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
-                    "ext": p.suffix.lower(),
-                })
-            except Exception:
-                continue
+    
+    # First try the main directory
+    if directory.exists():
+        for p in directory.iterdir():
+            if p.is_file():
+                try:
+                    items.append({
+                        "name": p.name,
+                        "size": p.stat().st_size,
+                        "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
+                        "ext": p.suffix.lower(),
+                    })
+                except Exception:
+                    continue
+    
+    # If no files found in main directory, try backup
+    if not items:
+        # Determine backup path based on directory type
+        if directory.name in CATEGORIES:
+            backup_path = BACKUP_DIR / directory.name
+        else:
+            backup_path = BACKUP_DIR
+            
+        if backup_path.exists():
+            logger.info(f"No files in main directory, checking backup: {backup_path}")
+            for p in backup_path.iterdir():
+                if p.is_file():
+                    try:
+                        # Restore file to main directory
+                        main_file_path = directory / p.name
+                        shutil.copy2(p, main_file_path)
+                        
+                        items.append({
+                            "name": p.name,
+                            "size": p.stat().st_size,
+                            "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
+                            "ext": p.suffix.lower(),
+                        })
+                        logger.info(f"Restored and listed file: {p.name}")
+                    except Exception as e:
+                        logger.warning(f"Error restoring backup file {p.name}: {e}")
+                        continue
+    
     # sort newest first
     items.sort(key=lambda x: x["modified"], reverse=True)
     return items
@@ -407,14 +531,57 @@ async def get_course_material_preview():
         raise HTTPException(status_code=500, detail=f"Failed to read preview: {e}")
     return {"file": latest.name, "path": str(latest), "preview": text}
 
+@app.get("/debug/info")
+async def debug_info():
+    """Debug endpoint to check system status"""
+    try:
+        return {
+            "upload_dir_exists": UPLOAD_DIR.exists(),
+            "backup_dir_exists": BACKUP_DIR.exists(),
+            "upload_dir_contents": list(str(p) for p in UPLOAD_DIR.glob("**/*") if p.is_file()) if UPLOAD_DIR.exists() else [],
+            "backup_dir_contents": list(str(p) for p in BACKUP_DIR.glob("**/*") if p.is_file()) if BACKUP_DIR.exists() else [],
+            "categories": CATEGORIES,
+            "config_exists": Path("user_config.json").exists(),
+            "curriculum_exists": (UPLOAD_DIR / "curriculum.pdf").exists(),
+            "generation_marker_exists": (UPLOAD_DIR / "generation_complete.json").exists(),
+            "environment": {
+                "gemini_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+                "cors_origins": os.environ.get("BACKEND_CORS_ORIGINS", "not_set"),
+                "platform": platform.system(),
+            }
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/files/{category}")
 async def list_category_files(category: str):
     """
     List files for a given category: course-material | quizzes | ppts | flashcards
     """
-    directory = _safe_category_to_dir(category)
-    files = _list_files_in_dir(directory)
-    return {"category": category, "directory": str(directory), "files": files, "total": len(files)}
+    try:
+        directory = _safe_category_to_dir(category)
+        files = _list_files_in_dir(directory)
+        
+        return {
+            "category": category, 
+            "directory": str(directory), 
+            "files": files, 
+            "total": len(files),
+            "backup_checked": len(files) > 0,
+            "debug": {
+                "directory_exists": directory.exists(),
+                "backup_dir": str(BACKUP_DIR / directory.name) if directory.name in CATEGORIES else str(BACKUP_DIR)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error listing files for category {category}: {e}")
+        return {
+            "category": category,
+            "directory": "error",
+            "files": [],
+            "total": 0,
+            "error": str(e)
+        }
 
 @app.get("/download/{category}/{filename}")
 async def download_file(category: str, filename: str):
