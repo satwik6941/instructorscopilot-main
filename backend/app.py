@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import asyncio
 import platform
+import time
 from pathlib import Path
 from typing import Optional, List, Dict
 import logging
@@ -586,11 +587,6 @@ async def get_course(course_id: str):
         logger.error(f"Error getting course {course_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    import uvicorn
-    # Use PORT environment variable for Render, fallback to 5000
-    port = int(os.environ.get("PORT", 5000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
 
 # ----------------------
 # Additional Content APIs
@@ -599,7 +595,8 @@ if __name__ == "__main__":
 def _safe_category_to_dir(category: str) -> Path:
     """Map category to a safe subdirectory under 'Inputs and Outputs'."""
     mapping = {
-        "course-material": "course material",
+        "course_material": "course material",
+        "course-material": "course material",  # Accept both formats
         "quizzes": "quizzes",
         "ppts": "ppts",
         "flashcards": "flashcards",
@@ -849,3 +846,10 @@ async def course_detail(slug: str):
         "flashcards": collect("flashcards"),
     }
     return result
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Use PORT environment variable for Render, fallback to 5000
+    port = int(os.environ.get("PORT", 5000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
